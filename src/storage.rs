@@ -2,7 +2,7 @@
 //! (`/sys/fs/btrfs/<uuid>/devinfo/<devid>/error_stats`) telemetry and alerting.
 
 use crate::error::SentinelError;
-use muobserve_ipc::{OtelLogEntry, OtelMetricEntry};
+use mu_observable_ipc::{OtelLogEntry, OtelMetricEntry};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;

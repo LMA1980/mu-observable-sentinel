@@ -2,7 +2,7 @@
 //! uninterruptible sleep (`D`-state / `TASK_UNINTERRUPTIBLE`) task inspector.
 
 use crate::error::SentinelError;
-use muobserve_ipc::{OtelLogEntry, OtelMetricEntry};
+use mu_observable_ipc::{OtelLogEntry, OtelMetricEntry};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 

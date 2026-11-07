@@ -1,10 +1,10 @@
-name = "musentinel"
-# Crate-embedded Symposium manifest for musentinel.
+name = "mu-observable-sentinel"
+# Crate-embedded Symposium manifest for mu-observable-sentinel.
 
 [[plugins]]
-depends-on = ["muobserve-ipc"]
-source.cargo = "muobserve-ipc"
+depends-on = ["mu-observable-ipc"]
+source.cargo = "mu-observable-ipc"
 
 [[plugins]]
-depends-on = ["mu-isolation"]
-source.cargo = "mu-isolation"
+depends-on = ["mu-ci-isolation"]
+source.cargo = "mu-ci-isolation"

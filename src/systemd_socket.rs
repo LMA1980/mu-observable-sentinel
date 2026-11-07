@@ -2,7 +2,7 @@
 //! headroom (`/proc/meminfo`) inspector.
 
 use crate::error::SentinelError;
-use muobserve_ipc::{OtelLogEntry, OtelMetricEntry};
+use mu_observable_ipc::{OtelLogEntry, OtelMetricEntry};
 use serde::{Deserialize, Serialize};
 
 /// Parsed memory and writeback counters from `/proc/meminfo` (in bytes).

@@ -1,4 +1,4 @@
-use musentinel::{
+use mu_observable_sentinel::{
     apply_sentinel_startup_sandbox, now_unix_nano, parse_kmsg_line, CollectorArrowEmitter,
     HostSentinelCollector, SentinelConfig, SentinelSandboxConfig,
 };
@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         collector_url = %cfg.collector_url,
         poll_secs = cfg.poll_interval.as_secs(),
         landlock_rules = plan.landlock_rules.len(),
-        "musentinel v{} initialized under MuIsolation KernelSandbox",
+        "mu-observable-sentinel v{} initialized under MuIsolation KernelSandbox",
         env!("CARGO_PKG_VERSION")
     );
 
@@ -82,7 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             _ = tokio::signal::ctrl_c() => {
-                tracing::info!("Received shutdown signal; exiting musentinel");
+                tracing::info!("Received shutdown signal; exiting mu-observable-sentinel");
                 break;
             }
         }

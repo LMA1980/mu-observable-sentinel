@@ -5,7 +5,7 @@
 //! followed by optional ` KEY=VALUE` continuation lines starting with a single space.
 
 use crate::error::SentinelError;
-use muobserve_ipc::OtelLogEntry;
+use mu_observable_ipc::OtelLogEntry;
 use serde::{Deserialize, Serialize};
 
 /// Canonical severity category classified from a kernel ring-buffer message.

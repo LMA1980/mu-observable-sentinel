@@ -4,7 +4,7 @@
 //! whose elapsed runtime exceeds `MUSENTINEL_RUNAWAY_SECS` (`900s` default) and emits
 //! structured `OtelLogEntry` diagnostics (`subsystem = "runaway_process"`).
 
-use muobserve_ipc::OtelLogEntry;
+use mu_observable_ipc::OtelLogEntry;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 

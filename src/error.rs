@@ -9,13 +9,13 @@ pub enum SentinelError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// Wire encoding/decoding failure from `muobserve-ipc`.
+    /// Wire encoding/decoding failure from `mu-observable-ipc`.
     #[error("IPC wire error: {0}")]
-    Ipc(#[from] muobserve_ipc::IpcError),
+    Ipc(#[from] mu_observable_ipc::IpcError),
 
-    /// Startup sandbox confinement error from `mu-isolation`.
+    /// Startup sandbox confinement error from `mu-ci-isolation`.
     #[error("MuIsolation sandbox error: {0}")]
-    Isolation(#[from] mu_isolation::IsolationError),
+    Isolation(#[from] mu_ci_isolation::IsolationError),
 
     /// Malformed procfs, sysfs, or `/dev/kmsg` line.
     #[error("Parse error in {source_name}: {detail}")]

@@ -1,7 +1,7 @@
 //! `MuIsolation` `KernelSandbox` startup confinement for `MuSentinel`.
 
 use crate::error::SentinelError;
-use mu_isolation::{
+use mu_ci_isolation::{
     EffectiveSandboxPolicy, IsolationBackend, KernelSandbox, LandlockRuleBuilder,
     NetworkEgressMode, SandboxBackendKind, SandboxExecutionPlan,
 };
