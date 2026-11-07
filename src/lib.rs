@@ -1,7 +1,7 @@
-//! `musentinel`: Sandboxed host infrastructure and kernel telemetry sentinel daemon (`M1`).
+//! `mu-observable-sentinel`: Sandboxed host infrastructure and kernel telemetry sentinel daemon (`M1`).
 //!
 //! Bridges host-level OS signals into `MuObserve-collector` (`http://127.0.0.1:4318/v1/{logs,metrics}`)
-//! using native Apache Arrow IPC streams (`muobserve-ipc`):
+//! using native Apache Arrow IPC streams (`mu-observable-ipc`):
 //! - `/dev/kmsg` kernel ring-buffer anomaly parser and classifier (`src/kmsg.rs`)
 //! - `/proc/pressure/{io,memory,cpu}` PSI stall metrics and `D`-state task inspector (`src/psi.rs`)
 //! - `/proc/diskstats` per-device `await` latency and `/sys/fs/btrfs` device error counters (`src/storage.rs`)
@@ -49,7 +49,7 @@ pub use systemd_socket::{
     count_systemd_journal_sockets, meminfo_to_telemetry, parse_meminfo, HostMeminfoSnapshot,
 };
 
-use muobserve_ipc::{OtelLogEntry, OtelMetricEntry};
+use mu_observable_ipc::{OtelLogEntry, OtelMetricEntry};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 

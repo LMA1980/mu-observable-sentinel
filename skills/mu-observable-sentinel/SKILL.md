@@ -1,13 +1,13 @@
 ---
-name: musentinel-agent
-description: "Configure, extend, and diagnose the MuSentinel host infrastructure & kernel telemetry sentinel daemon bridging /dev/kmsg, PSI & D-state stalls, per-disk latency (/proc/diskstats), Btrfs sysfs errors, journal socket backpressure, and runaway processes into MuObserve-collector."
+name: mu-observable-sentinel
+description: "Configure, extend, and diagnose the mu-observable-sentinel host infrastructure & kernel telemetry sentinel daemon bridging /dev/kmsg, PSI & D-state stalls, per-disk latency (/proc/diskstats), Btrfs sysfs errors, journal socket backpressure, and runaway processes into MuObserve-collector."
 ---
 
-# `musentinel` Host Infrastructure Sentinel Invariants
+# `mu-observable-sentinel` Host Infrastructure Sentinel Invariants
 
-## 1. Self-Confining Read-Only Startup Sandbox (`MuIsolation`)
+## 1. Self-Confining Read-Only Startup Sandbox (`mu-ci-isolation`)
 
-- `musentinel` confines itself at startup via `KernelSandbox` (Landlock V3+ allowlisting `/proc`, `/sys`, and `/dev/kmsg` read-only, bounded `64 MiB` `RLIMIT_MEMLOCK`, and zero filesystem write paths) without spawning privileged external subprocesses (`smartctl`, `btrfs`, `dmesg`).
+- `mu-observable-sentinel` confines itself at startup via `KernelSandbox` (Landlock V3+ allowlisting `/proc`, `/sys`, and `/dev/kmsg` read-only, bounded `64 MiB` `RLIMIT_MEMLOCK`, and zero filesystem write paths) without spawning privileged external subprocesses (`smartctl`, `btrfs`, `dmesg`).
 
 ## 2. Six-Layer Host & Kernel Signal Bridge to `MuObserve-collector`
 

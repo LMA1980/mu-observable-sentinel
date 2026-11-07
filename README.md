@@ -1,8 +1,8 @@
-# MuSentinel
+# mu-observable-sentinel
 
-**Sandboxed Host Infrastructure & Kernel Telemetry Sentinel Daemon (`musentinel`)**
+**Sandboxed Host Infrastructure & Kernel Telemetry Sentinel Daemon (`mu-observable-sentinel`)**
 
-`MuSentinel` bridges host-level operating system, block storage, filesystem, and kernel ring-buffer diagnostics into `MuObserve-collector` (`http://127.0.0.1:4318/v1/{logs,metrics}`) using native Apache Arrow IPC streams (`application/vnd.apache.arrow.stream`) defined in `muobserve-ipc`.
+`mu-observable-sentinel` bridges host-level operating system, block storage, filesystem, and kernel ring-buffer diagnostics into `MuObserve-collector` (`http://127.0.0.1:4318/v1/{logs,metrics}`) using native Apache Arrow IPC streams (`application/vnd.apache.arrow.stream`) defined in `mu-observable-ipc`.
 
 ## Core Capabilities
 
@@ -19,8 +19,8 @@
    - Monitors `/run/systemd/journal/dev-log` and `/run/systemd/journal/socket` receive queue depths (`host.systemd.journal_rx_queue`) and `/proc/meminfo` (`MemAvailable`, `SwapFree`, `Dirty`, `Writeback`) to provide early warning before `systemd-journald` or `sshd` stalls occur.
 5. **Runaway Process Watchdog (`/proc/[pid]/stat`)**:
    - Detects runaway build/test child processes (`miri`, `cargo`, `rustc`) exceeding `MUSENTINEL_RUNAWAY_SECS` (`900s` default) and emits structured warnings (`subsystem = "runaway_process"`).
-6. **`MuIsolation` Startup Confinement**:
-   - Validates and lowers a read-only `mu_isolation::KernelSandbox` execution plan restricting filesystem access to `/proc`, `/sys`, `/dev/kmsg`, and `/etc/musentinel` with bounded `RLIMIT_MEMLOCK` (`64 MiB`).
+6. **`mu-ci-isolation` Startup Confinement**:
+   - Validates and lowers a read-only `mu_ci_isolation::KernelSandbox` execution plan restricting filesystem access to `/proc`, `/sys`, `/dev/kmsg`, and `/etc/musentinel` with bounded `RLIMIT_MEMLOCK` (`64 MiB`).
 
 ## License
 

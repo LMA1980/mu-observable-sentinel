@@ -1,7 +1,7 @@
 //! Native Apache Arrow IPC HTTP emitter for `MuObserve-collector` (`/v1/metrics` and `/v1/logs`).
 
 use crate::error::SentinelError;
-use muobserve_ipc::{encode_log_batch, encode_metric_batch, OtelLogEntry, OtelMetricEntry};
+use mu_observable_ipc::{encode_log_batch, encode_metric_batch, OtelLogEntry, OtelMetricEntry};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
