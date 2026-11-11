@@ -1,6 +1,6 @@
 [package]
 name = "mu-observable-sentinel"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Sandboxed host infrastructure and kernel telemetry sentinel daemon bridging /dev/kmsg, PSI, block I/O latency, Btrfs device error counters, and systemd journal socket pressure into MuObserve-collector"
 license = "AGPL-3.0-only"
