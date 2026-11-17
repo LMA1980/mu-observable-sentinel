@@ -7,6 +7,10 @@
 use crate::error::SentinelError;
 use mu_observable_ipc::OtelLogEntry;
 use serde::{Deserialize, Serialize};
+use std::io::SeekFrom;
+use std::path::{Path, PathBuf};
+use tokio::io::{AsyncBufReadExt, AsyncSeekExt, BufReader};
+use tokio::sync::mpsc;
 
 /// Canonical severity category classified from a kernel ring-buffer message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,6 +193,132 @@ pub fn parse_kmsg_line(line: &str) -> Result<Option<KmsgRecord>, SentinelError> 
     }))
 }
 
+/// Persisted `/dev/kmsg` sequence checkpoint scoped to the host's current boot ID.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KmsgCheckpoint {
+    /// Host kernel boot UUID (`/proc/sys/kernel/random/boot_id`), when available.
+    pub boot_id: Option<String>,
+    /// Highest `/dev/kmsg` sequence number already processed.
+    pub last_seq: u64,
+}
+
+/// Reads the current host kernel boot UUID from `<proc_root>/sys/kernel/random/boot_id`.
+#[must_use]
+pub fn read_boot_id(proc_root: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(
+        proc_root
+            .join("sys")
+            .join("kernel")
+            .join("random")
+            .join("boot_id"),
+    )
+    .ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Loads the persisted `/dev/kmsg` sequence checkpoint from `path`, returning `None` if
+/// the file is absent/invalid or belongs to a previous `boot_id`.
+#[must_use]
+pub fn load_kmsg_checkpoint(path: &Path, current_boot_id: Option<&str>) -> Option<u64> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(ckpt) = serde_json::from_str::<KmsgCheckpoint>(trimmed) {
+        if let (Some(curr), Some(saved)) = (current_boot_id, ckpt.boot_id.as_deref()) {
+            if curr != saved {
+                return None;
+            }
+        }
+        return Some(ckpt.last_seq);
+    }
+    trimmed.parse::<u64>().ok()
+}
+
+/// Persists the highest ingested `/dev/kmsg` sequence checkpoint to `path`.
+pub fn save_kmsg_checkpoint(
+    path: &Path,
+    last_seq: u64,
+    current_boot_id: Option<&str>,
+) -> std::io::Result<()> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    let ckpt = KmsgCheckpoint {
+        boot_id: current_boot_id.map(str::to_string),
+        last_seq,
+    };
+    let payload = serde_json::to_string(&ckpt)
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?;
+    std::fs::write(path, payload)
+}
+
+/// Opens a kernel ring-buffer file (e.g. `/dev/kmsg`) and optionally seeks to [`SeekFrom::End`]
+/// (`SeekFrom::End(0)`) so historical boot-era ring-buffer records are not replayed at daemon startup.
+pub async fn open_kmsg_reader(
+    path: &Path,
+    seek_to_tail: bool,
+) -> std::io::Result<BufReader<tokio::fs::File>> {
+    let mut file = tokio::fs::File::open(path).await?;
+    if seek_to_tail {
+        file.seek(SeekFrom::End(0)).await?;
+    }
+    Ok(BufReader::new(file))
+}
+
+/// Streams `/dev/kmsg` lines from `path` into `tx`, seeking to tail on startup when `seek_to_tail`
+/// is enabled and recovering gracefully from `BrokenPipe` (`EPIPE`) ring-buffer overruns.
+pub async fn stream_kmsg_lines(path: PathBuf, seek_to_tail: bool, tx: mpsc::Sender<String>) {
+    let mut reader = match open_kmsg_reader(&path, seek_to_tail).await {
+        Ok(reader) => reader,
+        Err(err) => {
+            tracing::debug!(
+                path = %path.display(),
+                error = %err,
+                "/dev/kmsg stream unavailable; continuing with procfs/sysfs sweeps"
+            );
+            return;
+        }
+    };
+
+    let mut raw_buf = Vec::with_capacity(512);
+    loop {
+        raw_buf.clear();
+        match reader.read_until(b'\n', &mut raw_buf).await {
+            Ok(0) => break,
+            Ok(_) => {
+                let line = String::from_utf8_lossy(&raw_buf)
+                    .trim_end_matches(&['\r', '\n'][..])
+                    .to_string();
+                if tx.send(line).await.is_err() {
+                    break;
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "/dev/kmsg ring buffer overflowed (EPIPE); advancing to oldest available record"
+                );
+            }
+            Err(err) => {
+                tracing::debug!(
+                    path = %path.display(),
+                    error = %err,
+                    "Stopping /dev/kmsg reader after I/O error"
+                );
+                break;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,5 +349,40 @@ mod tests {
         let rec = parse_kmsg_line(debug_line).unwrap().unwrap();
         assert_eq!(rec.loglevel, 7);
         assert!(!rec.is_actionable());
+    }
+
+    #[test]
+    fn test_kmsg_checkpoint_roundtrip_and_boot_id_reset() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ckpt_path = tmp.path().join("state").join("kmsg.ckpt");
+
+        assert!(load_kmsg_checkpoint(&ckpt_path, Some("boot-1")).is_none());
+
+        save_kmsg_checkpoint(&ckpt_path, 4096, Some("boot-1")).expect("save ckpt");
+        assert_eq!(load_kmsg_checkpoint(&ckpt_path, Some("boot-1")), Some(4096));
+        assert_eq!(load_kmsg_checkpoint(&ckpt_path, None), Some(4096));
+        // Different boot_id invalidates stale sequence number
+        assert!(load_kmsg_checkpoint(&ckpt_path, Some("boot-2")).is_none());
+
+        // Plain integer checkpoint file is also supported
+        std::fs::write(&ckpt_path, "777\n").unwrap();
+        assert_eq!(load_kmsg_checkpoint(&ckpt_path, None), Some(777));
+    }
+
+    #[test]
+    fn test_read_boot_id_from_proc_root() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let boot_dir = tmp.path().join("sys/kernel/random");
+        std::fs::create_dir_all(&boot_dir).unwrap();
+        std::fs::write(
+            boot_dir.join("boot_id"),
+            "11111111-2222-3333-4444-555555555555\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_boot_id(tmp.path()).as_deref(),
+            Some("11111111-2222-3333-4444-555555555555")
+        );
     }
 }

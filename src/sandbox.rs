@@ -17,6 +17,7 @@ pub struct SentinelSandboxConfig {
     pub node_id: String,
     pub arch: String,
     pub config_dir: PathBuf,
+    pub kmsg_checkpoint_path: Option<PathBuf>,
     pub memlock_limit_kb: u64,
     pub max_pids: u32,
     pub max_memory_mb: u64,
@@ -36,6 +37,7 @@ impl Default for SentinelSandboxConfig {
             node_id: "worker-node".to_string(),
             arch,
             config_dir: PathBuf::from(DEFAULT_SENTINEL_CONFIG_DIR),
+            kmsg_checkpoint_path: None,
             memlock_limit_kb: 65_536, // 64 MiB bounded memlock ceiling
             max_pids: 32,
             max_memory_mb: 128,
@@ -46,9 +48,17 @@ impl Default for SentinelSandboxConfig {
 }
 
 /// Builds the read-only [`EffectiveSandboxPolicy`] for `MuSentinel` allowlisting
-/// `/proc`, `/sys`, `/dev`, and `/etc/musentinel` with zero writable host paths.
+/// `/proc`, `/sys`, `/dev`, and `/etc/musentinel` with zero writable host paths by default.
 #[must_use]
 pub fn build_sentinel_sandbox_policy(cfg: &SentinelSandboxConfig) -> EffectiveSandboxPolicy {
+    let mut write_paths = Vec::new();
+    if let Some(ckpt_path) = &cfg.kmsg_checkpoint_path {
+        if let Some(parent) = ckpt_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            write_paths.push(parent.to_path_buf());
+        } else {
+            write_paths.push(ckpt_path.clone());
+        }
+    }
     EffectiveSandboxPolicy {
         node_id: cfg.node_id.clone(),
         arch: cfg.arch.clone(),
@@ -61,7 +71,7 @@ pub fn build_sentinel_sandbox_policy(cfg: &SentinelSandboxConfig) -> EffectiveSa
             PathBuf::from("/usr"),
             PathBuf::from("/lib"),
         ],
-        write_paths: Vec::new(),
+        write_paths,
         exec_paths: vec![PathBuf::from("/usr/local/bin"), PathBuf::from("/usr/bin")],
         network_mode: NetworkEgressMode::RestrictedCidrs(vec!["127.0.0.1/32".to_string()]),
         memlock_limit_kb: cfg.memlock_limit_kb,

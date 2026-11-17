@@ -22,19 +22,26 @@ pub mod storage;
 pub mod systemd_socket;
 
 pub use config::{
-    SentinelConfig, DEFAULT_COLLECTOR_URL, DEFAULT_DISK_AWAIT_WARN_MS, DEFAULT_POLL_INTERVAL_SECS,
-    DEFAULT_PSI_WARN_PCT, DEFAULT_RUNAWAY_SECS,
+    SentinelConfig, DEFAULT_ALERT_COOLDOWN_SECS, DEFAULT_COLLECTOR_URL, DEFAULT_DISK_AWAIT_WARN_MS,
+    DEFAULT_KMSG_SEEK_TO_TAIL, DEFAULT_POLL_INTERVAL_SECS, DEFAULT_PSI_CRITICAL_PCT,
+    DEFAULT_PSI_PERSISTENCE_SAMPLES, DEFAULT_PSI_WARN_PCT, DEFAULT_RUNAWAY_SECS,
 };
 pub use emitter::CollectorArrowEmitter;
 pub use error::SentinelError;
-pub use kmsg::{classify_kmsg_body, parse_kmsg_line, KmsgCategory, KmsgRecord};
+pub use kmsg::{
+    classify_kmsg_body, load_kmsg_checkpoint, open_kmsg_reader, parse_kmsg_line, read_boot_id,
+    save_kmsg_checkpoint, stream_kmsg_lines, KmsgCategory, KmsgCheckpoint, KmsgRecord,
+};
 pub use process_watchdog::{
-    is_watched_build_comm, parse_proc_stat_starttime, parse_uptime_ticks,
-    runaway_processes_to_logs, scan_runaway_processes, RunawayProcessInfo, DEFAULT_CLK_TCK,
+    is_active_runaway_state, is_watched_build_comm, parse_proc_stat_starttime, parse_uptime_ticks,
+    runaway_processes_to_logs, scan_runaway_processes, RunawayAlertTracker, RunawayProcessInfo,
+    DEFAULT_CLK_TCK,
 };
 pub use psi::{
-    build_psi_dstate_alert, parse_proc_stat_state, parse_psi_content, psi_snapshot_to_metrics,
-    scan_dstate_processes, BlockedProcessInfo, PsiResourceSnapshot, PsiWindow,
+    build_psi_dstate_alert, is_kernel_thread, is_kworker_comm, parse_proc_stat_details,
+    parse_proc_stat_state, parse_psi_content, psi_snapshot_to_metrics, scan_dstate_processes,
+    BlockedProcessInfo, ProcStatDetails, PsiAlertTracker, PsiResourceSnapshot, PsiSweepSample,
+    PsiWindow, PF_KTHREAD,
 };
 pub use sandbox::{
     apply_sentinel_startup_sandbox, build_sentinel_sandbox_policy, SentinelSandboxConfig,
@@ -62,34 +69,60 @@ pub fn now_unix_nano() -> i64 {
         .unwrap_or(0)
 }
 
-/// Stateful host infrastructure collector that maintains the previous `/proc/diskstats`
-/// and `/dev/kmsg` sequence state across sweeps.
+/// Stateful host infrastructure collector that maintains `/proc/diskstats` deltas,
+/// PSI/D-state persistence & cooldown state, `(pid, starttime_ticks)` runaway deduplication,
+/// and `/dev/kmsg` sequence checkpoint state across sweeps.
 #[derive(Debug)]
 pub struct HostSentinelCollector {
     cfg: SentinelConfig,
     prev_diskstats: HashMap<String, DiskStatsCounter>,
-    last_kmsg_seq: u64,
+    psi_tracker: PsiAlertTracker,
+    runaway_tracker: RunawayAlertTracker,
+    elapsed_total_ms: u64,
+    last_kmsg_seq: Option<u64>,
+    boot_id: Option<String>,
 }
 
 impl HostSentinelCollector {
     /// Creates a new [`HostSentinelCollector`] from `cfg`.
     #[must_use]
     pub fn new(cfg: SentinelConfig) -> Self {
+        let boot_id = read_boot_id(&cfg.proc_root);
+        let last_kmsg_seq = cfg
+            .kmsg_checkpoint_path
+            .as_deref()
+            .and_then(|path| load_kmsg_checkpoint(path, boot_id.as_deref()));
+        let cooldown_ms = cfg.alert_cooldown_secs.saturating_mul(1_000);
         Self {
-            cfg,
+            psi_tracker: PsiAlertTracker::new(
+                cfg.psi_persistence_samples,
+                DEFAULT_PSI_CRITICAL_PCT,
+                cooldown_ms,
+            ),
+            runaway_tracker: RunawayAlertTracker::new(),
+            elapsed_total_ms: 0,
+            last_kmsg_seq,
+            boot_id,
             prev_diskstats: HashMap::new(),
-            last_kmsg_seq: 0,
+            cfg,
         }
+    }
+
+    /// Returns the highest `/dev/kmsg` sequence number ingested so far, if any.
+    #[must_use]
+    pub const fn last_kmsg_seq(&self) -> Option<u64> {
+        self.last_kmsg_seq
     }
 
     /// Executes a single deterministic sweep over `proc_root` and `sys_root`, returning
     /// `(Vec<OtelMetricEntry>, Vec<OtelLogEntry>)`.
     pub fn sweep_once(&mut self, elapsed_ms: u64) -> (Vec<OtelMetricEntry>, Vec<OtelLogEntry>) {
+        self.elapsed_total_ms = self.elapsed_total_ms.saturating_add(elapsed_ms);
         let ts_nano = now_unix_nano();
         let mut metrics = Vec::new();
         let mut logs = Vec::new();
 
-        // 1. PSI (/proc/pressure/{io,memory,cpu}) + D-state task inspection
+        // 1. PSI (/proc/pressure/{io,memory,cpu}) + D-state task inspection (persistence + cooldown)
         let mut io_psi = None;
         let mut mem_psi = None;
         for resource in ["io", "memory", "cpu"] {
@@ -112,14 +145,15 @@ impl HostSentinelCollector {
             }
         }
         let blocked = scan_dstate_processes(&self.cfg.proc_root);
-        if let Some(alert) = build_psi_dstate_alert(
-            io_psi.as_ref(),
-            mem_psi.as_ref(),
-            &blocked,
-            self.cfg.psi_warn_pct,
-            &self.cfg.node_id,
-            ts_nano,
-        ) {
+        if let Some(alert) = self.psi_tracker.observe(&PsiSweepSample {
+            io_snap: io_psi.as_ref(),
+            mem_snap: mem_psi.as_ref(),
+            blocked: &blocked,
+            warn_pct: self.cfg.psi_warn_pct,
+            node_id: &self.cfg.node_id,
+            elapsed_total_ms: self.elapsed_total_ms,
+            now_unix_nano: ts_nano,
+        }) {
             logs.push(alert);
         }
 
@@ -168,10 +202,14 @@ impl HostSentinelCollector {
             }
         }
 
-        // 5. Runaway process watchdog (/proc/[pid]/stat)
+        // 5. Runaway process watchdog (/proc/[pid]/stat) with (pid, starttime_ticks) deduplication
+        let cooldown_ms = self.cfg.alert_cooldown_secs.saturating_mul(1_000);
         let runaways = scan_runaway_processes(&self.cfg.proc_root, self.cfg.runaway_process_secs);
+        let due_runaways =
+            self.runaway_tracker
+                .filter_due(&runaways, self.elapsed_total_ms, cooldown_ms);
         logs.extend(runaway_processes_to_logs(
-            &runaways,
+            &due_runaways,
             &self.cfg.node_id,
             ts_nano,
         ));
@@ -179,18 +217,33 @@ impl HostSentinelCollector {
         (metrics, logs)
     }
 
-    ///Ingests a batch of `/dev/kmsg` text lines and returns new actionable [`OtelLogEntry`] records
-    /// with `seq > self.last_kmsg_seq`.
+    /// Ingests a batch of `/dev/kmsg` text lines and returns new actionable [`OtelLogEntry`]
+    /// records with `seq > self.last_kmsg_seq`, optionally persisting the updated checkpoint.
     pub fn ingest_kmsg_lines(&mut self, content: &str) -> Vec<OtelLogEntry> {
+        let prev_seq = self.last_kmsg_seq;
         let ts_nano = now_unix_nano();
         let mut out = Vec::new();
         for line in content.lines() {
             if let Ok(Some(rec)) = parse_kmsg_line(line) {
-                if rec.seq > self.last_kmsg_seq {
-                    self.last_kmsg_seq = rec.seq;
+                let is_new = self.last_kmsg_seq.is_none_or(|last| rec.seq > last);
+                if is_new {
+                    self.last_kmsg_seq = Some(rec.seq);
                     if rec.is_actionable() {
                         out.push(rec.to_otel_log(&self.cfg.node_id, ts_nano));
                     }
+                }
+            }
+        }
+        if self.last_kmsg_seq != prev_seq {
+            if let (Some(ckpt_path), Some(seq)) =
+                (&self.cfg.kmsg_checkpoint_path, self.last_kmsg_seq)
+            {
+                if let Err(err) = save_kmsg_checkpoint(ckpt_path, seq, self.boot_id.as_deref()) {
+                    tracing::warn!(
+                        path = %ckpt_path.display(),
+                        error = %err,
+                        "Failed to persist /dev/kmsg sequence checkpoint"
+                    );
                 }
             }
         }
@@ -275,13 +328,13 @@ mod tests {
         let mut collector = HostSentinelCollector::new(cfg);
         let (m1, l1) = collector.sweep_once(5_000);
         assert!(!m1.is_empty());
-        // Should contain PSI D-state alert and Btrfs error alert
-        assert!(l1.iter().any(|l| l.attributes_json.contains("psi_dstate")));
+        // Sweep 1: Btrfs error alerts immediately, while psi_dstate awaits 3-sweep persistence
+        assert!(!l1.iter().any(|l| l.attributes_json.contains("psi_dstate")));
         assert!(l1
             .iter()
             .any(|l| l.attributes_json.contains("btrfs_errors")));
 
-        // Second sweep with high disk write latency
+        // Second sweep with high disk write latency (still < 3 sweeps for psi_dstate)
         std::fs::write(
             proc_root.join("diskstats"),
             "   8       48 sdd 110 0 880 600 210 0 1680 9000 2 5800 9600 0 0 0 0 0 0\n",
@@ -294,6 +347,19 @@ mod tests {
         assert!(l2
             .iter()
             .any(|l| l.attributes_json.contains("disk_latency")));
+        assert!(!l2.iter().any(|l| l.attributes_json.contains("psi_dstate")));
+
+        // Third sweep reaches 3 consecutive D-state / PSI ticks and emits ERROR
+        let (_m3, l3) = collector.sweep_once(5_000);
+        let psi_err = l3
+            .iter()
+            .find(|l| l.attributes_json.contains("psi_dstate"))
+            .expect("3rd consecutive sweep emits psi_dstate");
+        assert_eq!(psi_err.severity_text, "ERROR");
+
+        // Fourth sweep within 300s cooldown suppresses duplicate psi_dstate alert
+        let (_m4, l4) = collector.sweep_once(5_000);
+        assert!(!l4.iter().any(|l| l.attributes_json.contains("psi_dstate")));
 
         // Kmsg ingestion
         let kmsg_logs = collector.ingest_kmsg_lines(
@@ -301,5 +367,126 @@ mod tests {
         );
         assert_eq!(kmsg_logs.len(), 1);
         assert_eq!(kmsg_logs[0].severity_text, "ERROR");
+        assert_eq!(collector.last_kmsg_seq(), Some(901));
+    }
+
+    #[test]
+    fn test_collector_filters_kworkers_and_dedups_runaways_across_sweeps() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let proc_root = tmp.path().join("proc");
+        let sys_root = tmp.path().join("sys");
+
+        std::fs::create_dir_all(proc_root.join("pressure")).unwrap();
+        std::fs::create_dir_all(proc_root.join("net")).unwrap();
+        std::fs::create_dir_all(proc_root.join("105")).unwrap();
+        std::fs::create_dir_all(proc_root.join("201")).unwrap();
+        std::fs::create_dir_all(proc_root.join("202")).unwrap();
+        std::fs::create_dir_all(proc_root.join("203")).unwrap();
+        std::fs::create_dir_all(&sys_root).unwrap();
+
+        std::fs::write(
+            proc_root.join("pressure").join("io"),
+            "some avg10=0.00 avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n",
+        )
+        .unwrap();
+        // kworker in D-state with 0.00% PSI -> must never alert
+        std::fs::write(
+            proc_root.join("105").join("stat"),
+            "105 (kworker/u16:2+ixgbe) D 2 0 0 0 -1 2129984 0 0 0 0 0 0 0 0 20 0 1 0 100 0 0\n",
+        )
+        .unwrap();
+        std::fs::write(proc_root.join("105").join("wchan"), "0\n").unwrap();
+
+        // Uptime 5000s = 500_000 ticks
+        std::fs::write(proc_root.join("uptime"), "5000.00 4000.00\n").unwrap();
+        // Sleeping cargo-llvm-cov wrapper past 2100s -> ignored
+        std::fs::write(
+            proc_root.join("201").join("stat"),
+            "201 (cargo-llvm-cov) S 1 201 201 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 100000 0 0\n",
+        )
+        .unwrap();
+        // Active miri at exactly 1800s (start = 320_000 ticks) -> ignored under 2100s default
+        std::fs::write(
+            proc_root.join("202").join("stat"),
+            "202 (miri) R 1 202 202 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 320000 0 0\n",
+        )
+        .unwrap();
+        // Active rustc at 2200s (start = 280_000 ticks) -> alerts once and deduplicates
+        std::fs::write(
+            proc_root.join("203").join("stat"),
+            "203 (rustc) R 1 203 203 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 280000 0 0\n",
+        )
+        .unwrap();
+
+        let cfg = SentinelConfig {
+            node_id: "node-a".to_string(),
+            arch: "x86_64".to_string(),
+            proc_root,
+            sys_root,
+            ..SentinelConfig::default()
+        };
+        let mut collector = HostSentinelCollector::new(cfg);
+
+        // Sweep 1: single runaway alert for pid 203, zero psi_dstate alerts
+        let (_, l1) = collector.sweep_once(5_000);
+        let r1: Vec<_> = l1
+            .iter()
+            .filter(|l| l.attributes_json.contains("runaway_process"))
+            .collect();
+        assert_eq!(r1.len(), 1);
+        assert!(r1[0].body.contains("comm=rustc pid=203"));
+        assert!(!l1.iter().any(|l| l.attributes_json.contains("psi_dstate")));
+
+        // Sweeps 2..=4: kworker still silent, pid 203 deduplicated during 300s cooldown
+        for _ in 0..3 {
+            let (_, logs) = collector.sweep_once(5_000);
+            assert!(!logs
+                .iter()
+                .any(|l| l.attributes_json.contains("psi_dstate")));
+            assert!(!logs
+                .iter()
+                .any(|l| l.attributes_json.contains("runaway_process")));
+        }
+    }
+
+    #[test]
+    fn test_collector_kmsg_checkpoint_prevents_replay_across_restarts() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let proc_root = tmp.path().join("proc");
+        let boot_dir = proc_root.join("sys/kernel/random");
+        std::fs::create_dir_all(&boot_dir).unwrap();
+        std::fs::write(boot_dir.join("boot_id"), "boot-uuid-1\n").unwrap();
+
+        let ckpt_path = tmp.path().join("state").join("kmsg.ckpt");
+        let cfg = SentinelConfig {
+            node_id: "node-a".to_string(),
+            arch: "x86_64".to_string(),
+            proc_root: proc_root.clone(),
+            sys_root: tmp.path().join("sys"),
+            kmsg_checkpoint_path: Some(ckpt_path.clone()),
+            ..SentinelConfig::default()
+        };
+
+        let mut first = HostSentinelCollector::new(cfg.clone());
+        let boot_lines = concat!(
+            "3,0,100,-;ima: Error Communicating to TPM chip\n",
+            "4,10,500,-;invoked oom-killer: gfp_mask=0x100cca\n",
+            "6,11,600,-;routine info line\n",
+        );
+        let first_logs = first.ingest_kmsg_lines(boot_lines);
+        assert_eq!(first_logs.len(), 2);
+        assert_eq!(first.last_kmsg_seq(), Some(11));
+        drop(first);
+
+        // Simulated restart with same boot_id and checkpoint must skip seq <= 11
+        let mut restarted = HostSentinelCollector::new(cfg);
+        assert_eq!(restarted.last_kmsg_seq(), Some(11));
+        let replay_plus_new = format!(
+            "{boot_lines}3,12,900,-;critical target error, dev sda, sector 10 op 0x3:(DISCARD)\n"
+        );
+        let restart_logs = restarted.ingest_kmsg_lines(&replay_plus_new);
+        assert_eq!(restart_logs.len(), 1);
+        assert!(restart_logs[0].body.contains("critical target error"));
+        assert_eq!(restarted.last_kmsg_seq(), Some(12));
     }
 }
