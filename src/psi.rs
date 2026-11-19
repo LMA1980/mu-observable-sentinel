@@ -1,7 +1,9 @@
 //! Linux Pressure Stall Information (`/proc/pressure/{io,memory,cpu}`) and
 //! uninterruptible sleep (`D`-state / `TASK_UNINTERRUPTIBLE`) task inspector.
 
-use crate::config::{DEFAULT_PSI_CRITICAL_PCT, DEFAULT_PSI_PERSISTENCE_SAMPLES};
+use crate::config::{
+    DEFAULT_PSI_CRITICAL_PCT, DEFAULT_PSI_PERSISTENCE_SAMPLES, SENTINEL_SERVICE_NAME,
+};
 use crate::error::SentinelError;
 use mu_observable_ipc::{OtelLogEntry, OtelMetricEntry};
 use serde::{Deserialize, Serialize};
@@ -132,7 +134,7 @@ pub fn psi_snapshot_to_metrics(
     let mut out = vec![
         OtelMetricEntry {
             timestamp_unix_nano: now_unix_nano,
-            service_name: "musentinel".to_string(),
+            service_name: SENTINEL_SERVICE_NAME.to_string(),
             node_id: node_id.to_string(),
             metric_name: format!("host.psi.{resource}.some_avg10"),
             metric_unit: "%".to_string(),
@@ -148,7 +150,7 @@ pub fn psi_snapshot_to_metrics(
         },
         OtelMetricEntry {
             timestamp_unix_nano: now_unix_nano,
-            service_name: "musentinel".to_string(),
+            service_name: SENTINEL_SERVICE_NAME.to_string(),
             node_id: node_id.to_string(),
             metric_name: format!("host.psi.{resource}.some_avg60"),
             metric_unit: "%".to_string(),
@@ -167,7 +169,7 @@ pub fn psi_snapshot_to_metrics(
     if let Some(full) = snap.full {
         out.push(OtelMetricEntry {
             timestamp_unix_nano: now_unix_nano,
-            service_name: "musentinel".to_string(),
+            service_name: SENTINEL_SERVICE_NAME.to_string(),
             node_id: node_id.to_string(),
             metric_name: format!("host.psi.{resource}.full_avg10"),
             metric_unit: "%".to_string(),
@@ -475,7 +477,7 @@ fn build_psi_dstate_log_entry(
         } else {
             "WARN".to_string()
         },
-        service_name: "musentinel".to_string(),
+        service_name: SENTINEL_SERVICE_NAME.to_string(),
         node_id: node_id.to_string(),
         body,
         attributes_json: attrs.to_string(),
@@ -540,6 +542,9 @@ mod tests {
 
         let metrics = psi_snapshot_to_metrics("io", &snap, "node-a", "x86_64", 1_000_000);
         assert_eq!(metrics.len(), 3);
+        assert!(metrics
+            .iter()
+            .all(|m| m.service_name == SENTINEL_SERVICE_NAME));
 
         let blocked = vec![BlockedProcessInfo {
             pid: 412,
@@ -549,6 +554,7 @@ mod tests {
         let alert = build_psi_dstate_alert(Some(&snap), None, &blocked, 10.0, "node-a", 1_000_000)
             .expect("should alert");
         assert_eq!(alert.severity_text, "ERROR");
+        assert_eq!(alert.service_name, SENTINEL_SERVICE_NAME);
         assert!(alert.body.contains("systemd-journal"));
         assert!(alert.body.contains("btrfs_commit_transaction"));
     }

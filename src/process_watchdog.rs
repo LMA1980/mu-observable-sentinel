@@ -4,6 +4,7 @@
 //! in `R` or `D` state whose elapsed runtime exceeds `MUSENTINEL_RUNAWAY_SECS` (`2100s` default)
 //! and emits deduplicated `OtelLogEntry` diagnostics (`subsystem = "runaway_process"`).
 
+use crate::config::SENTINEL_SERVICE_NAME;
 use crate::psi::{is_kernel_thread, parse_proc_stat_details};
 use mu_observable_ipc::OtelLogEntry;
 use serde::{Deserialize, Serialize};
@@ -186,7 +187,7 @@ pub fn runaway_processes_to_logs(
                 span_id: format!("{:016x}", u64::from(p.pid)),
                 severity_number: 13,
                 severity_text: "WARN".to_string(),
-                service_name: "musentinel".to_string(),
+                service_name: SENTINEL_SERVICE_NAME.to_string(),
                 node_id: node_id.to_string(),
                 body,
                 attributes_json: attrs.to_string(),
@@ -233,6 +234,7 @@ mod tests {
             12345,
         );
         assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].service_name, SENTINEL_SERVICE_NAME);
         assert!(logs[0].body.contains("elapsed=2200s"));
         assert!(logs[0]
             .attributes_json

@@ -1,6 +1,7 @@
 //! Systemd journal socket backpressure (`/proc/net/unix`) and host memory/writeback
 //! headroom (`/proc/meminfo`) inspector.
 
+use crate::config::SENTINEL_SERVICE_NAME;
 use crate::error::SentinelError;
 use mu_observable_ipc::{OtelLogEntry, OtelMetricEntry};
 use serde::{Deserialize, Serialize};
@@ -93,7 +94,7 @@ pub fn meminfo_to_telemetry(
     let metrics = vec![
         OtelMetricEntry {
             timestamp_unix_nano: now_unix_nano,
-            service_name: "musentinel".to_string(),
+            service_name: SENTINEL_SERVICE_NAME.to_string(),
             node_id: node_id.to_string(),
             metric_name: "host.memory.available_bytes".to_string(),
             metric_unit: "bytes".to_string(),
@@ -109,7 +110,7 @@ pub fn meminfo_to_telemetry(
         },
         OtelMetricEntry {
             timestamp_unix_nano: now_unix_nano,
-            service_name: "musentinel".to_string(),
+            service_name: SENTINEL_SERVICE_NAME.to_string(),
             node_id: node_id.to_string(),
             metric_name: "host.memory.dirty_bytes".to_string(),
             metric_unit: "bytes".to_string(),
@@ -125,7 +126,7 @@ pub fn meminfo_to_telemetry(
         },
         OtelMetricEntry {
             timestamp_unix_nano: now_unix_nano,
-            service_name: "musentinel".to_string(),
+            service_name: SENTINEL_SERVICE_NAME.to_string(),
             node_id: node_id.to_string(),
             metric_name: "host.memory.writeback_bytes".to_string(),
             metric_unit: "bytes".to_string(),
@@ -141,7 +142,7 @@ pub fn meminfo_to_telemetry(
         },
         OtelMetricEntry {
             timestamp_unix_nano: now_unix_nano,
-            service_name: "musentinel".to_string(),
+            service_name: SENTINEL_SERVICE_NAME.to_string(),
             node_id: node_id.to_string(),
             metric_name: "host.systemd.journal_sockets".to_string(),
             metric_unit: "count".to_string(),
@@ -175,7 +176,7 @@ pub fn meminfo_to_telemetry(
             span_id: format!("{:016x}", now_unix_nano as u64),
             severity_number: 13,
             severity_text: "WARN".to_string(),
-            service_name: "musentinel".to_string(),
+            service_name: SENTINEL_SERVICE_NAME.to_string(),
             node_id: node_id.to_string(),
             body,
             attributes_json: serde_json::json!({
@@ -205,7 +206,11 @@ mod tests {
         assert_eq!(snap.mem_total_bytes, 16_384_000 * 1024);
         let (metrics, logs) = meminfo_to_telemetry(&snap, 3, "node-a", "x86_64", 123);
         assert_eq!(metrics.len(), 4);
+        assert!(metrics
+            .iter()
+            .all(|m| m.service_name == SENTINEL_SERVICE_NAME));
         assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].service_name, SENTINEL_SERVICE_NAME);
         assert!(logs[0].body.contains("Low host available memory"));
     }
 }

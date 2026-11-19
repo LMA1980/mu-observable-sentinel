@@ -6,9 +6,10 @@
 
 ## Runtime Configuration
 
-- `MUSENTINEL_SERVE=true` (or `1`): Runs the continuous polling and `/dev/kmsg` streaming loop after startup sandbox validation; when unset, the binary validates the sandbox plan and exits cleanly.
-- `MUOBSERVE_COLLECTOR_URL`: Base URL for [`mu-observable-collector`](https://github.com/LMA1980/mu-observable-collector) (defaults to `http://127.0.0.1:4318`).
-- `MUOBSERVE_NODE_ID`: Node identifier attached to emitted `OtelMetricEntry` and `OtelLogEntry` payloads.
+- `MU_OBSERVABLE_SENTINEL_SERVE=true` (or `1`; falls back to `MUSENTINEL_SERVE` / `MUOBSERVE_SERVE`): Runs the continuous polling and `/dev/kmsg` streaming loop after startup sandbox validation; when unset, the binary validates the sandbox plan and exits cleanly.
+- `MU_OBSERVABLE_SENTINEL_COLLECTOR_URL` (falls back to `MUSENTINEL_COLLECTOR_URL` / `MUOBSERVE_COLLECTOR_URL`): Base URL for [`mu-observable-collector`](https://github.com/LMA1980/mu-observable-collector) (defaults to `http://127.0.0.1:4318`).
+- `MU_OBSERVABLE_SENTINEL_NODE_ID` (falls back to `MUSENTINEL_NODE_ID` / `MUOBSERVE_NODE_ID`): Node identifier attached to emitted `OtelMetricEntry` and `OtelLogEntry` payloads.
+- Systemd deployment templates live in `deploy/mu-observable-sentinel.service` and `deploy/mu-observable-sentinel.env.example` (targeting `/etc/mu-observable-sentinel/sentinel.env` and `/var/lib/mu-observable-sentinel`).
 
 ## Core Capabilities
 
@@ -26,7 +27,7 @@
 1. **Runaway Process Watchdog (`/proc/[pid]/stat`)**:
    - Detects active (`R`/`D`) build/test child processes (`miri`, `cargo`, `rustc`) exceeding `MUSENTINEL_RUNAWAY_SECS` (`2100s` default, calibrated above `1800s` CI stage ceilings) while ignoring sleeping parent wrappers (`state = S`) and deduplicating per `(pid, starttime_ticks)` (`subsystem = "runaway_process"`).
 1. **[`mu-ci-isolation`](https://github.com/LMA1980/mu-ci-isolation) Startup Confinement**:
-   - Validates and lowers a read-only `mu_ci_isolation::KernelSandbox` execution plan restricting filesystem access to `/proc`, `/sys`, `/dev/kmsg`, and `/etc/musentinel` with bounded `RLIMIT_MEMLOCK` (`64 MiB`).
+   - Validates and lowers a read-only `mu_ci_isolation::KernelSandbox` execution plan restricting filesystem access to `/proc`, `/sys`, `/dev/kmsg`, and `/etc/mu-observable-sentinel` (with on-disk fallback to `/etc/muobserve-sentinel` / `/etc/musentinel`) with bounded `RLIMIT_MEMLOCK` (`64 MiB`).
 
 ## Ecosystem Integration
 
