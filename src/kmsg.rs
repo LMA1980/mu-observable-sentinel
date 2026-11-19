@@ -4,6 +4,7 @@
 //! `<prio>,<seq>,<ts_usec>,<flags>;<message>\n`
 //! followed by optional ` KEY=VALUE` continuation lines starting with a single space.
 
+use crate::config::SENTINEL_SERVICE_NAME;
 use crate::error::SentinelError;
 use mu_observable_ipc::OtelLogEntry;
 use serde::{Deserialize, Serialize};
@@ -91,7 +92,7 @@ impl KmsgRecord {
             span_id: format!("{:016x}", self.seq.wrapping_add(1)),
             severity_number,
             severity_text: severity_text.to_string(),
-            service_name: "musentinel".to_string(),
+            service_name: SENTINEL_SERVICE_NAME.to_string(),
             node_id: node_id.to_string(),
             body: self.message.clone(),
             attributes_json: attrs.to_string(),
@@ -336,7 +337,7 @@ mod tests {
 
         let log = rec.to_otel_log("node-a", 1_700_000_000_000_000_000);
         assert_eq!(log.severity_text, "ERROR");
-        assert_eq!(log.service_name, "musentinel");
+        assert_eq!(log.service_name, SENTINEL_SERVICE_NAME);
         assert!(log.attributes_json.contains("block_storage_error"));
     }
 

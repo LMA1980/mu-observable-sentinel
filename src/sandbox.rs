@@ -8,8 +8,14 @@ use mu_ci_isolation::{
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-/// Canonical configuration directory allowlisted for read-only access by `MuSentinel`.
-pub const DEFAULT_SENTINEL_CONFIG_DIR: &str = "/etc/musentinel";
+/// Canonical configuration directory allowlisted for read-only access by `mu-observable-sentinel`.
+pub const DEFAULT_SENTINEL_CONFIG_DIR: &str = "/etc/mu-observable-sentinel";
+
+/// Legacy `muobserve-sentinel` configuration directory retained for on-disk fallback.
+pub const LEGACY_SENTINEL_MUOBSERVE_CONFIG_DIR: &str = "/etc/muobserve-sentinel";
+
+/// Legacy `musentinel` configuration directory retained for on-disk fallback.
+pub const LEGACY_SENTINEL_MUSENTINEL_CONFIG_DIR: &str = "/etc/musentinel";
 
 /// Startup confinement configuration for `MuSentinel` backed by `MuIsolation` [`KernelSandbox`].
 #[derive(Debug, Clone)]
@@ -47,8 +53,8 @@ impl Default for SentinelSandboxConfig {
     }
 }
 
-/// Builds the read-only [`EffectiveSandboxPolicy`] for `MuSentinel` allowlisting
-/// `/proc`, `/sys`, `/dev`, and `/etc/musentinel` with zero writable host paths by default.
+/// Builds the read-only [`EffectiveSandboxPolicy`] for `mu-observable-sentinel` allowlisting
+/// `/proc`, `/sys`, `/dev`, and `/etc/mu-observable-sentinel` with zero writable host paths by default.
 #[must_use]
 pub fn build_sentinel_sandbox_policy(cfg: &SentinelSandboxConfig) -> EffectiveSandboxPolicy {
     let mut write_paths = Vec::new();
@@ -89,7 +95,7 @@ pub fn apply_sentinel_startup_sandbox(
 ) -> Result<SandboxExecutionPlan, SentinelError> {
     let policy = build_sentinel_sandbox_policy(cfg);
     let sandbox = KernelSandbox::new();
-    let argv = vec![OsString::from("/usr/local/bin/musentinel")];
+    let argv = vec![OsString::from("/usr/local/bin/mu-observable-sentinel")];
     let plan = sandbox.build_execution_plan(&policy, &argv)?;
 
     if cfg.enforce_landlock_on_linux {
@@ -105,14 +111,26 @@ pub fn apply_sentinel_startup_sandbox(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mu_ci_isolation::READ_ACCESS;
+    use std::path::Path;
 
     #[test]
     fn test_sentinel_sandbox_plan_is_read_only() {
         let cfg = SentinelSandboxConfig::default();
+        assert_eq!(cfg.config_dir, Path::new("/etc/mu-observable-sentinel"));
         let policy = build_sentinel_sandbox_policy(&cfg);
         assert!(policy.write_paths.is_empty());
         assert_eq!(policy.memlock_limit_kb, 65_536);
+        assert!(policy
+            .read_paths
+            .contains(&PathBuf::from("/etc/mu-observable-sentinel")));
         let plan = apply_sentinel_startup_sandbox(&cfg).expect("valid sandbox plan");
         assert!(!plan.landlock_rules.is_empty());
+        let cfg_rule = plan
+            .landlock_rules
+            .iter()
+            .find(|r| r.path == Path::new("/etc/mu-observable-sentinel"))
+            .expect("/etc/mu-observable-sentinel Landlock rule");
+        assert_eq!(cfg_rule.access_mask, READ_ACCESS);
     }
 }

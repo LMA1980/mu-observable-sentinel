@@ -22,9 +22,13 @@ pub mod storage;
 pub mod systemd_socket;
 
 pub use config::{
-    SentinelConfig, DEFAULT_ALERT_COOLDOWN_SECS, DEFAULT_COLLECTOR_URL, DEFAULT_DISK_AWAIT_WARN_MS,
-    DEFAULT_KMSG_SEEK_TO_TAIL, DEFAULT_POLL_INTERVAL_SECS, DEFAULT_PSI_CRITICAL_PCT,
-    DEFAULT_PSI_PERSISTENCE_SAMPLES, DEFAULT_PSI_WARN_PCT, DEFAULT_RUNAWAY_SECS,
+    env_var_first, env_var_first_with, resolve_preferred_path_chain, should_serve_from_env,
+    should_serve_from_env_with, SentinelConfig, DEFAULT_ALERT_COOLDOWN_SECS, DEFAULT_COLLECTOR_URL,
+    DEFAULT_DISK_AWAIT_WARN_MS, DEFAULT_KMSG_SEEK_TO_TAIL, DEFAULT_POLL_INTERVAL_SECS,
+    DEFAULT_PSI_CRITICAL_PCT, DEFAULT_PSI_PERSISTENCE_SAMPLES, DEFAULT_PSI_WARN_PCT,
+    DEFAULT_RUNAWAY_SECS, DEFAULT_SENTINEL_CHECKPOINT_PATH, DEFAULT_SENTINEL_STATE_DIR,
+    LEGACY_SENTINEL_CHECKPOINT_PATH, LEGACY_SENTINEL_MUOBSERVE_CHECKPOINT_PATH,
+    SENTINEL_SERVICE_NAME,
 };
 pub use emitter::CollectorArrowEmitter;
 pub use error::SentinelError;
@@ -45,7 +49,8 @@ pub use psi::{
 };
 pub use sandbox::{
     apply_sentinel_startup_sandbox, build_sentinel_sandbox_policy, SentinelSandboxConfig,
-    DEFAULT_SENTINEL_CONFIG_DIR,
+    DEFAULT_SENTINEL_CONFIG_DIR, LEGACY_SENTINEL_MUOBSERVE_CONFIG_DIR,
+    LEGACY_SENTINEL_MUSENTINEL_CONFIG_DIR,
 };
 pub use storage::{
     btrfs_errors_to_telemetry, compute_disk_latency_deltas, disk_deltas_to_telemetry,

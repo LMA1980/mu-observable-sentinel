@@ -1,0 +1,28 @@
+[Unit]
+Description=MuObservable Host Infrastructure & Kernel Telemetry Sentinel Daemon
+Documentation=https://github.com/LMA1980/mu-observable-sentinel
+After=network-online.target mu-observable-collector.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mu-observable-sentinel
+Group=mu-observable-sentinel
+WorkingDirectory=/var/lib/mu-observable-sentinel
+EnvironmentFile=/etc/mu-observable-sentinel/sentinel.env
+ExecStart=/usr/local/bin/mu-observable-sentinel
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+ReadWritePaths=/var/lib/mu-observable-sentinel
+ReadOnlyPaths=/etc/mu-observable-sentinel
+InaccessiblePaths=/etc/shadow /root
+
+[Install]
+WantedBy=multi-user.target
